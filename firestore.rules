@@ -1,0 +1,63 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function myProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && myProfile().role == 'admin';
+    }
+
+    function isMarketer() {
+      return isSignedIn() && myProfile().role == 'marketer';
+    }
+
+    // ---------- users ----------
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      // Marketer accounts are created client-side via a secondary Firebase
+      // Auth instance (see src/firebase.js) but the resulting profile doc
+      // must still only be written by an admin (or by the user themself,
+      // for the first admin bootstrap — see README).
+      allow create: if isAdmin() || !exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if isAdmin() || request.auth.uid == userId;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- customers ----------
+    match /customers/{customerId} {
+      allow read: if isAdmin() || (isMarketer() && resource.data.assignedMarketerId == request.auth.uid);
+      allow create: if isAdmin() || (isMarketer() && request.resource.data.assignedMarketerId == request.auth.uid);
+      allow update: if isAdmin() || (isMarketer() && resource.data.assignedMarketerId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // ---------- sales ----------
+    match /sales/{saleId} {
+      allow read: if isAdmin() || (isMarketer() && resource.data.marketerId == request.auth.uid);
+      allow create: if isAdmin() || (isMarketer() && request.resource.data.marketerId == request.auth.uid);
+      allow update: if isAdmin() || (isMarketer() && resource.data.marketerId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // ---------- payments ----------
+    match /payments/{paymentId} {
+      allow read: if isAdmin() || (isMarketer() && resource.data.marketerId == request.auth.uid);
+      allow create: if isAdmin() || (isMarketer() && request.resource.data.marketerId == request.auth.uid);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+    // ---------- settings (shared targets doc) ----------
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}
