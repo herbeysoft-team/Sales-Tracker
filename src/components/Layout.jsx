@@ -6,6 +6,8 @@ import {
   Receipt,
   UserCog,
   UserCircle,
+  FileText,
+  ShieldCheck,
   LogOut,
   Menu,
   X,
@@ -33,7 +35,7 @@ export default function Layout({ children }) {
   return (
     <div className="flex min-h-screen flex-col bg-paper md:flex-row">
       {/* Mobile top bar */}
-      <header className="flex items-center justify-between border-b border-line bg-card px-4 py-3 md:hidden">
+      <header className="flex items-center justify-between border-b border-line bg-card px-4 py-3 md:hidden print:hidden">
         <div className="flex items-center gap-2">
           <img src="/favicon.svg" alt="" className="h-5 w-5 rounded" />
           <span className="text-base font-semibold">SALES TRACKER</span>
@@ -67,6 +69,13 @@ export default function Layout({ children }) {
               >
                 <UserCircle size={17} /> Profile
               </NavLink>
+              <NavLink
+                to="/reports"
+                onClick={() => setDrawerOpen(false)}
+                className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}
+              >
+                <FileText size={17} /> Reports
+              </NavLink>
               {isAdmin && (
                 <NavLink
                   to="/marketers"
@@ -74,6 +83,15 @@ export default function Layout({ children }) {
                   className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}
                 >
                   <UserCog size={17} /> Marketers
+                </NavLink>
+              )}
+              {isAdmin && (
+                <NavLink
+                  to="/audit-trail"
+                  onClick={() => setDrawerOpen(false)}
+                  className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}
+                >
+                  <ShieldCheck size={17} /> Audit trail
                 </NavLink>
               )}
             </nav>
@@ -95,7 +113,7 @@ export default function Layout({ children }) {
       )}
 
       {/* Desktop sidebar */}
-      <aside className="hidden w-60 flex-shrink-0 flex-col justify-between bg-brand-dark px-4 py-6 md:flex">
+      <aside className="hidden w-60 flex-shrink-0 flex-col justify-between bg-brand-dark px-4 py-6 md:flex print:hidden">
         <div>
           <div className="mb-8 flex items-center gap-2 px-2">
             <img src="/favicon.svg" alt="" className="h-6 w-6 rounded" />
@@ -112,9 +130,17 @@ export default function Layout({ children }) {
             <NavLink to="/sales" className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}>
               <Receipt size={17} /> Sales Ledger
             </NavLink>
+            <NavLink to="/reports" className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}>
+              <FileText size={17} /> Reports
+            </NavLink>
             {isAdmin && (
               <NavLink to="/marketers" className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}>
                 <UserCog size={17} /> Marketers
+              </NavLink>
+            )}
+            {isAdmin && (
+              <NavLink to="/audit-trail" className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}>
+                <ShieldCheck size={17} /> Audit trail
               </NavLink>
             )}
             <NavLink to="/profile" className={({ isActive }) => `${navItem} ${isActive ? navActive : navInactive}`}>
@@ -138,12 +164,12 @@ export default function Layout({ children }) {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto pb-20 md:pb-0">
-        <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6 md:px-8 md:py-8">{children}</div>
+      <main className="flex-1 overflow-y-auto pb-20 md:pb-0 print:pb-0">
+        <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6 md:px-8 md:py-8 print:max-w-none print:p-0">{children}</div>
       </main>
 
       {/* Mobile bottom tab bar */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-card md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-card md:hidden print:hidden">
         <NavLink to="/dashboard" className={({ isActive }) => `${tabItem} ${isActive ? tabActive : tabInactive}`}>
           <LayoutGrid size={20} />
           Dashboard

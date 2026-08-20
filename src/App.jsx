@@ -16,6 +16,8 @@ import Marketers from './pages/Marketers'
 import MarketerDetail from './pages/MarketerDetail'
 import NewUser from './pages/NewUser'
 import Profile from './pages/Profile'
+import Reports from './pages/Reports'
+import AuditTrail from './pages/AuditTrail'
 
 function Protected({ children, adminOnly }) {
   return (
@@ -45,10 +47,12 @@ export default function App() {
           <Route path="/payments/new" element={<Protected><NewPayment /></Protected>} />
 
           <Route path="/profile" element={<Protected><Profile /></Protected>} />
+          <Route path="/reports" element={<Protected><Reports /></Protected>} />
 
           <Route path="/marketers" element={<Protected adminOnly><Marketers /></Protected>} />
           <Route path="/marketers/new" element={<Protected adminOnly><NewUser /></Protected>} />
           <Route path="/marketers/:id" element={<Protected adminOnly><MarketerDetail /></Protected>} />
+          <Route path="/audit-trail" element={<Protected adminOnly><AuditTrail /></Protected>} />
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>

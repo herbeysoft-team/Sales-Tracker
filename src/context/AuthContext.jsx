@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth'
 import { auth } from '../firebase'
-import { subscribeUserProfile } from '../lib/firestore'
+import { subscribeUserProfile, logAuditEvent } from '../lib/firestore'
 
 const AuthContext = createContext(null)
 
@@ -41,7 +41,11 @@ export function AuthProvider({ children }) {
     }
   }, [])
 
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password)
+  const login = async (email, password) => {
+    const result = await signInWithEmailAndPassword(auth, email, password)
+    logAuditEvent('Login', email)
+    return result
+  }
   const logout = () => signOut(auth)
 
   const value = {

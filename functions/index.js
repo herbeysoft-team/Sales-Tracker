@@ -56,10 +56,12 @@ async function sendWhatsApp(text) {
 async function getCustomerAndMarketer(customerId) {
   const customerSnap = await db.doc(`customers/${customerId}`).get()
   const customer = customerSnap.exists ? customerSnap.data() : null
+  const marketerIds = customer?.assignedMarketerIds || []
   let marketerName = 'Unassigned'
-  if (customer?.assignedMarketerId) {
-    const marketerSnap = await db.doc(`users/${customer.assignedMarketerId}`).get()
-    if (marketerSnap.exists) marketerName = marketerSnap.data().name
+  if (marketerIds.length > 0) {
+    const marketerSnaps = await Promise.all(marketerIds.map((id) => db.doc(`users/${id}`).get()))
+    const names = marketerSnaps.filter((s) => s.exists).map((s) => s.data().name)
+    if (names.length > 0) marketerName = names.join(', ')
   }
   return { customerName: customer?.name || 'Unknown customer', marketerName }
 }

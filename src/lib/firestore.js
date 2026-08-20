@@ -8,16 +8,55 @@ import {
   query,
   where,
   orderBy,
+  limit,
   onSnapshot,
   runTransaction,
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore'
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth'
-import { db, secondaryAuth } from '../firebase'
+import { db, secondaryAuth, auth } from '../firebase'
 import { effectiveSaleStatus } from './format'
 
 const toTimestamp = (value) => (value ? Timestamp.fromDate(new Date(value)) : null)
+
+// ---------- Audit trail ----------
+// Fire-and-forget direct write — no Cloud Function involved, so no Blaze
+// plan requirement. This means entries aren't tamper-proof (anyone signed
+// in could theoretically write a fabricated one via dev tools), but for an
+// internal accountability log of who-did-what that's an acceptable
+// trade-off for the simplicity. The rule in firestore.rules still enforces
+// that you can only log actions as yourself, not impersonate someone else.
+export function logAuditEvent(action, details = '') {
+  const user = auth.currentUser
+  if (!user) return
+
+  ;(async () => {
+    try {
+      const profileSnap = await getDoc(doc(db, 'users', user.uid))
+      const userName = profileSnap.exists() ? profileSnap.data().name : user.email || 'Unknown user'
+      const ref = doc(collection(db, 'auditLogs'))
+      await setDoc(ref, {
+        userId: user.uid,
+        userName,
+        action,
+        details,
+        createdAt: serverTimestamp(),
+      })
+    } catch (err) {
+      console.error('logAuditEvent failed:', err)
+    }
+  })()
+}
+
+export function subscribeAuditLogs(callback, { limitCount = 300 } = {}) {
+  const q = query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(limitCount))
+  return onSnapshot(
+    q,
+    (snap) => callback(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    (err) => console.error('subscribeAuditLogs error:', err)
+  )
+}
 
 // ---------- Marketers / Users ----------
 
@@ -32,6 +71,7 @@ export async function createUserAccount({ name, email, password, phone, role = '
     createdAt: serverTimestamp(),
   })
   await signOut(secondaryAuth) // don't leave the admin signed in as the new user
+  logAuditEvent('Created user account', `${name} (${role})`)
   return cred.user.uid
 }
 
@@ -61,6 +101,7 @@ export function subscribeUserProfile(uid, callback) {
 // any user's profile — write access is enforced in firestore.rules.
 export async function updateUserProfile(uid, patch) {
   await updateDoc(doc(db, 'users', uid), patch)
+  logAuditEvent('Updated user profile', uid)
 }
 
 // ---------- Customers ----------
@@ -81,11 +122,13 @@ export async function createCustomer({ name, phone, email, address, assignedMark
     totalOutstandingBalance: 0,
     nextDueDate: null,
   })
+  logAuditEvent('Created customer', name)
   return ref.id
 }
 
 export async function updateCustomer(customerId, patch) {
   await updateDoc(doc(db, 'customers', customerId), patch)
+  logAuditEvent('Updated customer', customerId)
 }
 
 export function subscribeCustomers(callback, { marketerId } = {}) {
@@ -227,6 +270,7 @@ export async function createSale({ customerId, marketerId, amount, orderDate, du
   })
   await applyAvailableCreditToSale(customerId, ref.id)
   await recomputeCustomerRollups(customerId)
+  logAuditEvent('Logged sale', `₦${Number(amount).toLocaleString()} — customer ${customerId}`)
   return ref.id
 }
 
@@ -258,6 +302,7 @@ export async function updateSale(saleId, { amount, orderDate, dueDate, descripti
   })
   await applyAvailableCreditToSale(customerId, saleId)
   await recomputeCustomerRollups(customerId)
+  logAuditEvent('Edited sale', saleId)
 }
 
 export function subscribeSales(callback, { marketerId, customerId } = {}) {
@@ -300,6 +345,7 @@ export async function setSaleStatus(saleId, status) {
   } else {
     await updateDoc(saleRef, { status, manualStatus: true })
   }
+  logAuditEvent('Changed sale status', `${saleId} → ${status}`)
 }
 
 // ---------- Payments ----------
@@ -356,6 +402,7 @@ export async function recordPayment({ saleId, customerId, amount, paidDate, meth
   }
 
   await recomputeCustomerRollups(resolvedCustomerId)
+  logAuditEvent('Recorded payment', `₦${Number(amount).toLocaleString()} — customer ${resolvedCustomerId}`)
   return paymentRef.id
 }
 
