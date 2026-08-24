@@ -12,6 +12,7 @@ import Sales from './pages/Sales'
 import NewSale from './pages/NewSale'
 import EditSale from './pages/EditSale'
 import NewPayment from './pages/NewPayment'
+import NewAdjustment from './pages/NewAdjustment'
 import Marketers from './pages/Marketers'
 import MarketerDetail from './pages/MarketerDetail'
 import NewUser from './pages/NewUser'
@@ -45,6 +46,7 @@ export default function App() {
           <Route path="/sales/new" element={<Protected><NewSale /></Protected>} />
           <Route path="/sales/:id/edit" element={<Protected adminOnly><EditSale /></Protected>} />
           <Route path="/payments/new" element={<Protected><NewPayment /></Protected>} />
+          <Route path="/adjustments/new" element={<Protected adminOnly><NewAdjustment /></Protected>} />
 
           <Route path="/profile" element={<Protected><Profile /></Protected>} />
           <Route path="/reports" element={<Protected><Reports /></Protected>} />

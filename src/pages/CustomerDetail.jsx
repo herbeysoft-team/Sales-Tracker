@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Plus, CreditCard, Pencil } from 'lucide-react'
+import { Plus, CreditCard, Pencil, Scale } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { useAuth } from '../context/AuthContext'
-import { useCustomer, useSales, usePayments, useMarketers } from '../lib/hooks'
+import { useCustomer, useSales, usePayments, useAdjustments, useMarketers } from '../lib/hooks'
 import { formatMoney, formatDate, daysUntil, effectiveSaleStatus, toDate } from '../lib/format'
 import { updateCustomer } from '../lib/firestore'
 import StatusBadge from '../components/StatusBadge'
@@ -16,6 +16,7 @@ export default function CustomerDetail() {
   const { customer, loading } = useCustomer(id)
   const { sales } = useSales({ customerId: id })
   const { payments } = usePayments({ customerId: id })
+  const { adjustments } = useAdjustments({ customerId: id })
   const { marketers } = useMarketers()
 
   const assignedIds = customer?.assignedMarketerIds || []
@@ -30,24 +31,32 @@ export default function CustomerDetail() {
       }))
   }, [sales])
 
-  // Merges sales (debits, reduce the balance) and payments (credits, restore
-  // it) into one chronological ledger with a running balance — negative
-  // means the customer currently owes money, back to zero once settled.
+  // Merges sales (debits, reduce the balance), payments (credits, restore
+  // it), and admin ledger adjustments (either direction) into one
+  // chronological ledger with a running balance — negative means the
+  // customer currently owes money, back to zero once settled.
   const ledgerEntries = useMemo(() => {
     const entries = [
       ...sales.map((s) => ({
         key: `sale-${s.id}`,
-        type: 'sale',
+        typeLabel: 'Sale',
         date: s.orderDate,
         label: s.description || 'Sale',
         amount: -(s.amount || 0),
       })),
       ...payments.map((p) => ({
         key: `payment-${p.id}`,
-        type: 'payment',
+        typeLabel: 'Payment',
         date: p.paidDate,
         label: `Payment · ${p.method}`,
         amount: p.amount || 0,
+      })),
+      ...adjustments.map((a) => ({
+        key: `adjustment-${a.id}`,
+        typeLabel: 'Adjustment',
+        date: a.adjustmentDate,
+        label: `Adjustment · ${a.reason}`,
+        amount: a.amount || 0,
       })),
     ].sort((a, b) => (toDate(a.date)?.getTime() || 0) - (toDate(b.date)?.getTime() || 0))
 
@@ -56,7 +65,7 @@ export default function CustomerDetail() {
       balance += e.amount
       return { ...e, balance }
     })
-  }, [sales, payments])
+  }, [sales, payments, adjustments])
 
   if (loading) return <p className="text-sm text-ink-soft">Loading…</p>
   if (!customer) return <p className="text-sm text-ink-soft">Customer not found.</p>
@@ -77,6 +86,11 @@ export default function CustomerDetail() {
           <Link to={`/sales/new?customerId=${id}`} className="btn-secondary">
             <Plus size={15} /> Log sale
           </Link>
+          {isAdmin && (
+            <Link to={`/adjustments/new?customerId=${id}`} className="btn-secondary">
+              <Scale size={15} /> Adjustment
+            </Link>
+          )}
           <Link to={`/payments/new?customerId=${id}`} className="btn-primary">
             <CreditCard size={15} /> Record payment
           </Link>
@@ -117,7 +131,7 @@ export default function CustomerDetail() {
       <div className="card mt-6">
         <div className="border-b border-line px-5 py-4">
           <h2 className="text-sm font-semibold">Account ledger</h2>
-          <p className="text-xs text-ink-faint">Sales debit the balance, payments credit it back.</p>
+          <p className="text-xs text-ink-faint">Sales debit the balance, payments and credit adjustments restore it.</p>
         </div>
         {/* Mobile: stacked cards */}
         <ul className="md:hidden">
@@ -130,7 +144,7 @@ export default function CustomerDetail() {
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium">{e.label}</p>
                 <p className="text-xs text-ink-faint">
-                  {formatDate(e.date)} · {e.type === 'sale' ? 'Debit' : 'Credit'}
+                  {formatDate(e.date)} · {e.typeLabel} · {e.amount < 0 ? 'Debit' : 'Credit'}
                 </p>
               </div>
               <div className="flex-shrink-0 text-right">
@@ -172,10 +186,10 @@ export default function CustomerDetail() {
                 <td className="whitespace-nowrap px-5 py-2.5 text-ink-soft">{formatDate(e.date)}</td>
                 <td className="px-5 py-2.5">{e.label}</td>
                 <td className="figure px-5 py-2.5 text-right text-rust">
-                  {e.type === 'sale' ? formatMoney(-e.amount) : ''}
+                  {e.amount < 0 ? formatMoney(-e.amount) : ''}
                 </td>
                 <td className="figure px-5 py-2.5 text-right text-teal">
-                  {e.type === 'payment' ? formatMoney(e.amount) : ''}
+                  {e.amount > 0 ? formatMoney(e.amount) : ''}
                 </td>
                 <td className={`figure px-5 py-2.5 text-right font-medium ${e.balance < 0 ? 'text-rust' : 'text-ink'}`}>
                   {formatMoney(e.balance)}

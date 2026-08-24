@@ -5,6 +5,7 @@ import {
   subscribeSales,
   subscribeMarketers,
   subscribePayments,
+  subscribeAdjustments,
 } from './firestore'
 
 export function useCustomers(filters = {}) {
@@ -77,3 +78,17 @@ export function useMarketers() {
   return { marketers, loading }
 }
 
+
+export function useAdjustments(filters = {}) {
+  const [adjustments, setAdjustments] = useState([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    setLoading(true)
+    const unsub = subscribeAdjustments((data) => {
+      setAdjustments(data)
+      setLoading(false)
+    }, filters)
+    return unsub
+  }, [filters.customerId])
+  return { adjustments, loading }
+}
