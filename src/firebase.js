@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
+import { getFunctions } from 'firebase/functions'
 
 // Fill these in from Firebase Console > Project Settings > Your apps > SDK config.
 // Best practice: move these into a .env file (VITE_FIREBASE_*) and read them with
@@ -17,6 +18,7 @@ const firebaseConfig = {
 export const app = getApps().length ? getApp() : initializeApp(firebaseConfig)
 export const auth = getAuth(app)
 export const db = getFirestore(app)
+export const functions = getFunctions(app)
 
 // --- Secondary app instance ---
 // Creating a new marketer account with createUserWithEmailAndPassword()

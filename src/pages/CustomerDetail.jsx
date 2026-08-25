@@ -1,18 +1,19 @@
 import { useMemo, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
-import { Plus, CreditCard, Pencil, Scale } from 'lucide-react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
+import { Plus, CreditCard, Pencil, Scale, Trash2 } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 import { useAuth } from '../context/AuthContext'
 import { useCustomer, useSales, usePayments, useAdjustments, useMarketers } from '../lib/hooks'
 import { formatMoney, formatDate, daysUntil, effectiveSaleStatus, toDate } from '../lib/format'
-import { updateCustomer } from '../lib/firestore'
+import { updateCustomer, deleteSale, deletePayment, deleteAdjustment, deleteCustomer } from '../lib/firestore'
 import StatusBadge from '../components/StatusBadge'
 import StatCard from '../components/StatCard'
 import MarketerMultiSelect from '../components/MarketerMultiSelect'
 
 export default function CustomerDetail() {
   const { id } = useParams()
-  const { isAdmin } = useAuth()
+  const navigate = useNavigate()
+  const { isAdmin, isSuperAdmin } = useAuth()
   const { customer, loading } = useCustomer(id)
   const { sales } = useSales({ customerId: id })
   const { payments } = usePayments({ customerId: id })
@@ -39,6 +40,8 @@ export default function CustomerDetail() {
     const entries = [
       ...sales.map((s) => ({
         key: `sale-${s.id}`,
+        entryType: 'sale',
+        id: s.id,
         typeLabel: 'Sale',
         date: s.orderDate,
         label: s.description || 'Sale',
@@ -46,6 +49,8 @@ export default function CustomerDetail() {
       })),
       ...payments.map((p) => ({
         key: `payment-${p.id}`,
+        entryType: 'payment',
+        id: p.id,
         typeLabel: 'Payment',
         date: p.paidDate,
         label: `Payment · ${p.method}`,
@@ -53,6 +58,8 @@ export default function CustomerDetail() {
       })),
       ...adjustments.map((a) => ({
         key: `adjustment-${a.id}`,
+        entryType: 'adjustment',
+        id: a.id,
         typeLabel: 'Adjustment',
         date: a.adjustmentDate,
         label: `Adjustment · ${a.reason}`,
@@ -66,6 +73,20 @@ export default function CustomerDetail() {
       return { ...e, balance }
     })
   }, [sales, payments, adjustments])
+
+  const handleDeleteEntry = async (entry) => {
+    const ok = window.confirm(
+      `Delete this ${entry.typeLabel.toLowerCase()}? "${entry.label}" for ${formatMoney(Math.abs(entry.amount))}.\n\nThis can't be undone.`
+    )
+    if (!ok) return
+    try {
+      if (entry.entryType === 'sale') await deleteSale(entry.id)
+      else if (entry.entryType === 'payment') await deletePayment(entry.id)
+      else if (entry.entryType === 'adjustment') await deleteAdjustment(entry.id)
+    } catch (err) {
+      window.alert('Could not delete this entry. Try again.')
+    }
+  }
 
   if (loading) return <p className="text-sm text-ink-soft">Loading…</p>
   if (!customer) return <p className="text-sm text-ink-soft">Customer not found.</p>
@@ -96,6 +117,8 @@ export default function CustomerDetail() {
           </Link>
         </div>
       </div>
+
+      {isSuperAdmin && <DeleteCustomerButton customer={customer} onDeleted={() => navigate('/customers')} />}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
         <StatCard label="Total purchased" value={formatMoney(customer.totalPurchasedAmount)} />
@@ -147,14 +170,21 @@ export default function CustomerDetail() {
                   {formatDate(e.date)} · {e.typeLabel} · {e.amount < 0 ? 'Debit' : 'Credit'}
                 </p>
               </div>
-              <div className="flex-shrink-0 text-right">
-                <p className={`figure text-sm ${e.amount < 0 ? 'text-rust' : 'text-teal'}`}>
-                  {e.amount < 0 ? '−' : '+'}
-                  {formatMoney(Math.abs(e.amount))}
-                </p>
-                <p className="text-xs text-ink-faint">
-                  Bal. <span className={e.balance < 0 ? 'font-medium text-rust' : ''}>{formatMoney(e.balance)}</span>
-                </p>
+              <div className="flex flex-shrink-0 items-center gap-2">
+                <div className="text-right">
+                  <p className={`figure text-sm ${e.amount < 0 ? 'text-rust' : 'text-teal'}`}>
+                    {e.amount < 0 ? '−' : '+'}
+                    {formatMoney(Math.abs(e.amount))}
+                  </p>
+                  <p className="text-xs text-ink-faint">
+                    Bal. <span className={e.balance < 0 ? 'font-medium text-rust' : ''}>{formatMoney(e.balance)}</span>
+                  </p>
+                </div>
+                {isSuperAdmin && (
+                  <button onClick={() => handleDeleteEntry(e)} className="text-ink-faint hover:text-rust" aria-label="Delete entry">
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
             </li>
           ))}
@@ -172,6 +202,7 @@ export default function CustomerDetail() {
               <th className="px-5 py-2.5 text-right font-medium">Debit</th>
               <th className="px-5 py-2.5 text-right font-medium">Credit</th>
               <th className="px-5 py-2.5 text-right font-medium">Balance</th>
+              {isSuperAdmin && <th className="px-5 py-2.5"></th>}
             </tr>
           </thead>
           <tbody>
@@ -180,6 +211,7 @@ export default function CustomerDetail() {
                 Opening balance
               </td>
               <td className="figure px-5 py-2.5 text-right">{formatMoney(0)}</td>
+              {isSuperAdmin && <td></td>}
             </tr>
             {ledgerEntries.map((e) => (
               <tr key={e.key} className="ledger-row hover:bg-paper/60">
@@ -194,11 +226,18 @@ export default function CustomerDetail() {
                 <td className={`figure px-5 py-2.5 text-right font-medium ${e.balance < 0 ? 'text-rust' : 'text-ink'}`}>
                   {formatMoney(e.balance)}
                 </td>
+                {isSuperAdmin && (
+                  <td className="px-5 py-2.5 text-right">
+                    <button onClick={() => handleDeleteEntry(e)} className="text-ink-faint hover:text-rust" aria-label="Delete entry">
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
             {ledgerEntries.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-5 py-6 text-center text-sm text-ink-faint">
+                <td colSpan={isSuperAdmin ? 6 : 5} className="px-5 py-6 text-center text-sm text-ink-faint">
                   No ledger activity yet.
                 </td>
               </tr>
@@ -311,5 +350,70 @@ function MarketersEditor({ customer, marketers, marketerNames, isAdmin }) {
         </button>
       )}
     </p>
+  )
+}
+
+function DeleteCustomerButton({ customer, onDeleted }) {
+  const [confirming, setConfirming] = useState(false)
+  const [typedName, setTypedName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleDelete = async () => {
+    if (typedName.trim() !== customer.name) {
+      setError('Type the customer name exactly to confirm.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await deleteCustomer(customer.id)
+      onDeleted()
+    } catch (err) {
+      setError('Could not delete this customer. Try again.')
+      setBusy(false)
+    }
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        onClick={() => setConfirming(true)}
+        className="mb-6 flex items-center gap-1.5 text-xs font-medium text-rust hover:underline"
+      >
+        <Trash2 size={13} /> Delete this customer
+      </button>
+    )
+  }
+
+  return (
+    <div className="mb-6 rounded-md border border-rust/30 bg-rust-soft p-4">
+      <p className="text-sm font-medium text-rust">
+        This permanently deletes {customer.name} and every sale, payment, and adjustment on their account. This
+        cannot be undone.
+      </p>
+      <p className="mt-2 text-xs text-ink-soft">
+        Type <span className="font-medium">{customer.name}</span> to confirm:
+      </p>
+      <input
+        className="input mt-1 max-w-sm"
+        value={typedName}
+        onChange={(e) => setTypedName(e.target.value)}
+        placeholder={customer.name}
+      />
+      {error && <p className="mt-1 text-xs text-rust">{error}</p>}
+      <div className="mt-3 flex gap-2">
+        <button
+          onClick={handleDelete}
+          disabled={busy}
+          className="rounded-md bg-rust px-4 py-2 text-sm font-medium text-paper transition hover:bg-rust/90 disabled:opacity-50"
+        >
+          {busy ? 'Deleting…' : 'Permanently delete'}
+        </button>
+        <button onClick={() => setConfirming(false)} className="btn-secondary">
+          Cancel
+        </button>
+      </div>
+    </div>
   )
 }

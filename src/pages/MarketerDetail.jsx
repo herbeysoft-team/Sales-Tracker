@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { startOfWeek, endOfWeek, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns'
-import { getMarketerStats, subscribeUserProfile, updateUserProfile } from '../lib/firestore'
+import { useAuth } from '../context/AuthContext'
+import { getMarketerStats, subscribeUserProfile, updateUserProfile, updateUserRole, setUserActive } from '../lib/firestore'
 import { useCustomers, useSales } from '../lib/hooks'
 import { formatMoney, formatDate, effectiveSaleStatus, relativeToNow, toDate } from '../lib/format'
 import StatCard from '../components/StatCard'
@@ -10,6 +11,8 @@ import TargetDonut from '../components/TargetDonut'
 
 export default function MarketerDetail() {
   const { id } = useParams()
+  const navigate = useNavigate()
+  const { isSuperAdmin, profile: myProfile } = useAuth()
   const [marketer, setMarketer] = useState(null)
   const [stats, setStats] = useState(null)
   const { customers } = useCustomers({ marketerId: id })
@@ -56,6 +59,10 @@ export default function MarketerDetail() {
       </div>
 
       <TargetsEditor marketer={marketer} weekSales={weekSales} monthSales={monthSales} />
+
+      {isSuperAdmin && (
+        <AccountControls marketer={marketer} currentUid={myProfile?.id} onRoleChangedAway={() => navigate('/marketers')} />
+      )}
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="card">
@@ -172,6 +179,81 @@ function TargetsEditor({ marketer, weekSales, monthSales }) {
           <TargetDonut label="This month" achieved={monthSales} target={marketer.monthlyTarget || 0} />
         </div>
       )}
+    </div>
+  )
+}
+
+function AccountControls({ marketer, currentUid, onRoleChangedAway }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const isSelf = marketer.id === currentUid
+
+  const handleRoleChange = async (e) => {
+    const newRole = e.target.value
+    if (newRole === marketer.role) return
+    if (isSelf) {
+      setError("You can't change your own role — ask another super admin.")
+      return
+    }
+    const ok = window.confirm(`Change ${marketer.name}'s role from ${marketer.role} to ${newRole}?`)
+    if (!ok) return
+    setBusy(true)
+    setError('')
+    try {
+      await updateUserRole(marketer.id, newRole)
+      if (newRole !== 'marketer') onRoleChangedAway()
+    } catch (err) {
+      setError('Could not change role. Try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleToggleActive = async () => {
+    if (isSelf) {
+      setError("You can't deactivate your own account.")
+      return
+    }
+    const nextActive = marketer.active === false
+    const ok = window.confirm(
+      nextActive ? `Reactivate ${marketer.name}'s account?` : `Deactivate ${marketer.name}'s account? They'll be signed out immediately and can't log back in until reactivated.`
+    )
+    if (!ok) return
+    setBusy(true)
+    setError('')
+    try {
+      await setUserActive(marketer.id, nextActive)
+    } catch (err) {
+      setError('Could not update account status. Try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card mt-6 border-rust/30 p-5">
+      <h2 className="mb-1 text-sm font-semibold text-rust">Account controls</h2>
+      <p className="mb-4 text-xs text-ink-faint">Super admin only — role and access changes.</p>
+
+      <div className="flex flex-wrap items-end gap-4">
+        <div>
+          <label className="label">Role</label>
+          <select className="input" value={marketer.role} onChange={handleRoleChange} disabled={busy || isSelf}>
+            <option value="marketer">Marketer</option>
+            <option value="admin">Admin</option>
+            <option value="superadmin">Super Admin</option>
+          </select>
+        </div>
+        <button
+          onClick={handleToggleActive}
+          disabled={busy || isSelf}
+          className={marketer.active === false ? 'btn-primary' : 'btn-secondary'}
+        >
+          {marketer.active === false ? 'Reactivate account' : 'Deactivate account'}
+        </button>
+      </div>
+      {isSelf && <p className="mt-2 text-xs text-ink-faint">You can't change your own role or deactivate yourself.</p>}
+      {error && <p className="mt-2 text-sm text-rust">{error}</p>}
     </div>
   )
 }

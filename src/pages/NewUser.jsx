@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 import { createUserAccount } from '../lib/firestore'
 
 export default function NewUser() {
   const navigate = useNavigate()
+  const { isSuperAdmin } = useAuth()
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', role: 'marketer' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -37,9 +39,11 @@ export default function NewUser() {
           <select className="input" value={form.role} onChange={update('role')}>
             <option value="marketer">Marketer</option>
             <option value="admin">Admin</option>
+            {isSuperAdmin && <option value="superadmin">Super Admin</option>}
           </select>
           <p className="mt-1 text-xs text-ink-faint">
-            Marketers see only customers assigned to them. Admins see everything.
+            Marketers see only customers assigned to them. Admins see everything. Super Admins can additionally
+            delete records and manage other accounts.
           </p>
         </div>
         <div>

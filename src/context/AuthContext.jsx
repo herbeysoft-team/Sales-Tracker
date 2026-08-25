@@ -26,6 +26,14 @@ export function AuthProvider({ children }) {
         // user's targets, role, or details, they see it live without
         // needing to log out and back in.
         profileUnsub = subscribeUserProfile(user.uid, (p) => {
+          if (p && p.active === false) {
+            // Deactivated while signed in — end the session immediately
+            // rather than leaving them logged in with a dead profile.
+            signOut(auth)
+            setProfile(null)
+            setLoading(false)
+            return
+          }
           setProfile(p)
           setLoading(false)
         })
@@ -52,7 +60,8 @@ export function AuthProvider({ children }) {
     user: firebaseUser,
     profile,
     role: profile?.role,
-    isAdmin: profile?.role === 'admin',
+    isAdmin: profile?.role === 'admin' || profile?.role === 'superadmin',
+    isSuperAdmin: profile?.role === 'superadmin',
     loading,
     login,
     logout,
