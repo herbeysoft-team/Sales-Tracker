@@ -42,7 +42,13 @@ export default function Dashboard() {
 
   const totals = useMemo(() => {
     const totalSalesValue = sales.reduce((s, x) => s + (x.amount || 0), 0)
-    const totalOutstanding = sales.reduce((s, x) => s + Math.max(0, x.amount - x.amountPaid), 0)
+    // Sum each customer's real outstanding balance (which already accounts
+    // for advance payments and ledger adjustments) rather than re-deriving
+    // it from raw sale amounts — keeps this figure consistent with what
+    // each customer's own page and the Reports page show. A customer in
+    // credit (negative balance) contributes 0 here rather than offsetting
+    // what other customers owe.
+    const totalOutstanding = customers.reduce((s, c) => s + Math.max(0, c.totalOutstandingBalance || 0), 0)
     const overdue = sales.filter((s) => effectiveSaleStatus(s) === 'overdue')
     return {
       totalSalesValue,
@@ -50,7 +56,7 @@ export default function Dashboard() {
       overdueCount: overdue.length,
       overdueValue: overdue.reduce((s, x) => s + (x.amount - x.amountPaid), 0),
     }
-  }, [sales])
+  }, [sales, customers])
 
   const dueSoon = useMemo(() => {
     return customers
@@ -61,10 +67,12 @@ export default function Dashboard() {
       .slice(0, 8)
   }, [customers])
 
-  // Week/Month/Year report: Sales and Exposure are scoped to sales placed
-  // in that period (exposure = how much of that period's sales is still
-  // unpaid, right now). Payments/remittances are scoped to when the money
-  // actually came in, which may be for sales from an earlier period.
+  // Week/Month/Year report: Sales and Remittance are scoped to that
+  // period. Exposure is deliberately NOT period-scoped — it's the same
+  // "how much of our money is currently in customers' hands" figure as
+  // the Outstanding stat card above, shown identically on all three
+  // cards, since a customer's total balance owed isn't really a
+  // week/month/year-specific thing.
   const reportPeriods = useMemo(() => {
     const now = new Date()
     const ranges = [
@@ -75,12 +83,10 @@ export default function Dashboard() {
 
     return ranges.map((r) => {
       let totalSales = 0
-      let totalExposure = 0
       for (const s of sales) {
         const d = toDate(s.orderDate)
         if (d && isWithinInterval(d, { start: r.start, end: r.end })) {
           totalSales += s.amount || 0
-          totalExposure += Math.max(0, (s.amount || 0) - (s.amountPaid || 0))
         }
       }
       let totalPayments = 0
@@ -96,10 +102,10 @@ export default function Dashboard() {
         rangeLabel: `${formatDateFns(r.start, 'MMM d')} – ${formatDateFns(r.end, 'MMM d, yyyy')}`,
         totalSales,
         totalPayments,
-        totalExposure,
+        totalExposure: totals.totalOutstanding,
       }
     })
-  }, [sales, payments])
+  }, [sales, payments, totals.totalOutstanding])
 
   return (
     <div>
@@ -121,21 +127,21 @@ export default function Dashboard() {
           accent="rust"
         />
       </div>
-      <h2 className="mb-3 text-sm font-semibold">Reports</h2>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {reportPeriods.map((r) => (
-              <PeriodReportCard
-                key={r.key}
-                label={r.label}
-                rangeLabel={r.rangeLabel}
-                sales={r.totalSales}
-                payments={r.totalPayments}
-                exposure={r.totalExposure}
-              />
-            ))}
-          </div>
 
-          <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-5">
+      <h2 className="mb-3 mt-8 text-sm font-semibold">Reports</h2>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {reportPeriods.map((r) => (
+          <PeriodReportCard
+            key={r.key}
+            label={r.label}
+            rangeLabel={r.rangeLabel}
+            sales={r.totalSales}
+            payments={r.totalPayments}
+            exposure={r.totalExposure}
+          />
+        ))}
+      </div>
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-5">
             <div className="lg:col-span-3">
               <SalesTrendChart sales={sales} />
             </div>
@@ -150,7 +156,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-
       <button
         onClick={() => setShowMore((v) => !v)}
         className="mx-auto mt-8 flex items-center gap-1.5 text-sm font-medium text-brand hover:underline"
@@ -160,10 +165,8 @@ export default function Dashboard() {
       </button>
 
       {showMore && (
-
         <div className="mt-6">
-
-          <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-5">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
             <div className="card lg:col-span-3">
               <div className="border-b border-line px-5 py-4">
                 <h2 className="text-sm font-semibold">Payments due soon</h2>
@@ -182,8 +185,8 @@ export default function Dashboard() {
                           {c.dueIn < 0
                             ? `${Math.abs(c.dueIn)} day(s) overdue`
                             : c.dueIn === 0
-                              ? 'Due today'
-                              : `Due in ${c.dueIn} day(s)`}
+                            ? 'Due today'
+                            : `Due in ${c.dueIn} day(s)`}
                         </p>
                       </div>
                       <span className="figure text-sm">{formatMoney(c.totalOutstandingBalance)}</span>
@@ -211,7 +214,8 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-    
+
+          
         </div>
       )}
     </div>
