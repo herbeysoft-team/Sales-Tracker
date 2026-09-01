@@ -206,7 +206,25 @@ export async function deleteCustomer(customerId) {
     await batch.commit()
   }
 
-  logAuditEvent('Deleted customer', `${customerId} (${salesSnap.size} sales, ${paymentsSnap.size} payments, ${adjustmentsSnap.size} adjustments removed with it)`)
+  logAuditEvent(
+    'Deleted customer',
+    `${customerId} (${salesSnap.size} sales, ${paymentsSnap.size} payments, ${adjustmentsSnap.size} adjustments removed with it)`
+  )
+}
+
+// Wraps a background/best-effort step (like recomputing a customer's
+// totals) so a transient Firestore error there — e.g. resource-exhausted
+// from a quota or rate limit — never makes the primary action (the actual
+// save) look like it failed to the user. Still logged to console for
+// debugging. The next successful write for that customer naturally
+// recomputes the totals correctly again, since it's a full recompute each
+// time, not an incremental patch.
+async function safely(fn, label) {
+  try {
+    await fn()
+  } catch (err) {
+    console.error(`${label} failed (did not block the primary save):`, err)
+  }
 }
 
 // Recomputes a customer's rollup fields (last order date, totals, next due
@@ -241,15 +259,23 @@ async function recomputeCustomerRollups(customerId) {
     if (orderDate && (!lastOrderDate || orderDate > lastOrderDate)) lastOrderDate = orderDate
   }
 
-  // Next due date still looks at each sale's own linked-payment balance —
-  // an unlinked advance payment (or a ledger adjustment) doesn't
-  // automatically settle a specific sale's due date until applied to one.
+  // "Last due date": the furthest-out due date among this customer's
+  // sales that are still not fully paid — determined from each sale's
+  // `status` field, which already reflects either the automatic payment
+  // math OR an admin's manual override. That means a sale an admin has
+  // manually marked "Paid" is correctly excluded here even if its
+  // amountPaid math alone wouldn't call it settled, and vice versa for a
+  // manual "Unpaid"/"Partial" override — exactly the "either manually or
+  // automatically" behavior asked for. This is deliberately the LATEST
+  // due date among outstanding sales, not the soonest — it answers "by
+  // when should this customer's account be fully clear," not "what's due
+  // next." Field name (`nextDueDate`) is unchanged to avoid touching every
+  // UI reference; only what value it holds has changed.
   let nextDueDate = null
   for (const sale of sales) {
-    const balance = Math.max(0, (sale.amount || 0) - (sale.amountPaid || 0))
-    if (balance > 0) {
+    if (sale.status !== 'paid') {
       const due = sale.dueDate?.toDate?.() ?? null
-      if (due && (!nextDueDate || due < nextDueDate)) nextDueDate = due
+      if (due && (!nextDueDate || due > nextDueDate)) nextDueDate = due
     }
   }
 
@@ -260,6 +286,15 @@ async function recomputeCustomerRollups(customerId) {
     lastOrderDate: lastOrderDate ? Timestamp.fromDate(lastOrderDate) : null,
     nextDueDate: nextDueDate ? Timestamp.fromDate(nextDueDate) : null,
   })
+}
+
+// Manual escape hatch: recomputes a customer's totals on demand. Wired to
+// a "Recalculate totals" button (admin-only) on the customer page, for the
+// rare case where a background recompute failed (e.g. a transient
+// Firestore quota/rate-limit error) and the stored totals are stale until
+// another write happens for that customer.
+export async function refreshCustomerTotals(customerId) {
+  await recomputeCustomerRollups(customerId)
 }
 
 // ---------- Sales ----------
@@ -333,8 +368,12 @@ export async function createSale({ customerId, marketerId, amount, orderDate, du
     manualStatus: false,
     createdAt: serverTimestamp(),
   })
-  await applyAvailableCreditToSale(customerId, ref.id)
-  await recomputeCustomerRollups(customerId)
+  // The sale itself is now safely saved. Everything below is best-effort
+  // bookkeeping — if either step fails (e.g. a transient Firestore quota
+  // error), that must not make this function throw and tell the user
+  // their sale didn't save, when it actually did.
+  await safely(() => applyAvailableCreditToSale(customerId, ref.id), 'applyAvailableCreditToSale')
+  await safely(() => recomputeCustomerRollups(customerId), 'recomputeCustomerRollups')
   logAuditEvent('Logged sale', `₦${Number(amount).toLocaleString()} — customer ${customerId}`)
   return ref.id
 }
@@ -365,8 +404,8 @@ export async function updateSale(saleId, { amount, orderDate, dueDate, descripti
     tx.update(saleRef, patch)
     return sale.customerId
   })
-  await applyAvailableCreditToSale(customerId, saleId)
-  await recomputeCustomerRollups(customerId)
+  await safely(() => applyAvailableCreditToSale(customerId, saleId), 'applyAvailableCreditToSale')
+  await safely(() => recomputeCustomerRollups(customerId), 'recomputeCustomerRollups')
   logAuditEvent('Edited sale', saleId)
 }
 
@@ -431,7 +470,7 @@ export async function deleteSale(saleId) {
   batch.delete(doc(db, 'sales', saleId))
   await batch.commit()
 
-  await recomputeCustomerRollups(sale.customerId)
+  await safely(() => recomputeCustomerRollups(sale.customerId), 'recomputeCustomerRollups')
   logAuditEvent('Deleted sale', `${saleId} — customer ${sale.customerId}`)
 }
 
@@ -445,7 +484,6 @@ export async function deleteSale(saleId) {
 // from *all* their sales and payments, not just linked ones.
 export async function recordPayment({ saleId, customerId, amount, paidDate, method, note, marketerId }) {
   const paymentRef = doc(collection(db, 'payments'))
-
   let resolvedCustomerId = customerId
 
   if (saleId) {
@@ -488,7 +526,7 @@ export async function recordPayment({ saleId, customerId, amount, paidDate, meth
     })
   }
 
-  await recomputeCustomerRollups(resolvedCustomerId)
+  await safely(() => recomputeCustomerRollups(resolvedCustomerId), 'recomputeCustomerRollups')
   logAuditEvent('Recorded payment', `₦${Number(amount).toLocaleString()} — customer ${resolvedCustomerId}`)
   return paymentRef.id
 }
@@ -524,21 +562,23 @@ export async function deletePayment(paymentId) {
 
   if (payment.saleId) {
     const saleRef = doc(db, 'sales', payment.saleId)
-    await runTransaction(db, async (tx) => {
-      const saleSnap = await tx.get(saleRef)
-      if (!saleSnap.exists()) return
-      const sale = saleSnap.data()
-      const newAmountPaid = Math.max(0, (sale.amountPaid || 0) - (payment.amount || 0))
-      const patch = { amountPaid: newAmountPaid }
-      if (!sale.manualStatus) {
-        patch.status = newAmountPaid <= 0 ? 'unpaid' : newAmountPaid >= sale.amount ? 'paid' : 'partial'
-      }
-      tx.update(saleRef, patch)
-    })
+    await safely(async () => {
+      await runTransaction(db, async (tx) => {
+        const saleSnap = await tx.get(saleRef)
+        if (!saleSnap.exists()) return
+        const sale = saleSnap.data()
+        const newAmountPaid = Math.max(0, (sale.amountPaid || 0) - (payment.amount || 0))
+        const patch = { amountPaid: newAmountPaid }
+        if (!sale.manualStatus) {
+          patch.status = newAmountPaid <= 0 ? 'unpaid' : newAmountPaid >= sale.amount ? 'paid' : 'partial'
+        }
+        tx.update(saleRef, patch)
+      })
+    }, 'reverse linked sale amountPaid')
   }
 
   await deleteDoc(paymentRef)
-  await recomputeCustomerRollups(payment.customerId)
+  await safely(() => recomputeCustomerRollups(payment.customerId), 'recomputeCustomerRollups')
   logAuditEvent('Deleted payment', `${paymentId} — customer ${payment.customerId}`)
 }
 
@@ -559,7 +599,7 @@ export async function createLedgerAdjustment({ customerId, amount, reason, adjus
     adjustmentDate: toTimestamp(adjustmentDate),
     createdAt: serverTimestamp(),
   })
-  await recomputeCustomerRollups(customerId)
+  await safely(() => recomputeCustomerRollups(customerId), 'recomputeCustomerRollups')
   logAuditEvent('Ledger adjustment', `₦${Number(amount).toLocaleString()} — customer ${customerId} — ${reason}`)
   return ref.id
 }
@@ -585,7 +625,7 @@ export async function deleteAdjustment(adjustmentId) {
   if (!snap.exists()) return
   const customerId = snap.data().customerId
   await deleteDoc(ref)
-  await recomputeCustomerRollups(customerId)
+  await safely(() => recomputeCustomerRollups(customerId), 'recomputeCustomerRollups')
   logAuditEvent('Deleted ledger adjustment', `${adjustmentId} — customer ${customerId}`)
 }
 

@@ -1,11 +1,19 @@
 import { useMemo, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { Plus, CreditCard, Pencil, Scale, Trash2 } from 'lucide-react'
+import { Plus, CreditCard, Pencil, Scale, Trash2, FileSpreadsheet } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
+import * as XLSX from 'xlsx'
 import { useAuth } from '../context/AuthContext'
 import { useCustomer, useSales, usePayments, useAdjustments, useMarketers } from '../lib/hooks'
 import { formatMoney, formatDate, daysUntil, effectiveSaleStatus, toDate } from '../lib/format'
-import { updateCustomer, deleteSale, deletePayment, deleteAdjustment, deleteCustomer } from '../lib/firestore'
+import {
+  updateCustomer,
+  deleteSale,
+  deletePayment,
+  deleteAdjustment,
+  deleteCustomer,
+  refreshCustomerTotals,
+} from '../lib/firestore'
 import StatusBadge from '../components/StatusBadge'
 import StatCard from '../components/StatCard'
 import MarketerMultiSelect from '../components/MarketerMultiSelect'
@@ -74,6 +82,30 @@ export default function CustomerDetail() {
     })
   }, [sales, payments, adjustments])
 
+  // Exports exactly what the Account Ledger table shows: opening balance,
+  // every entry with a Debit/Credit split, and the running balance —
+  // straight to a downloadable .xlsx, entirely client-side.
+  const handleExportLedger = () => {
+    const rows = [['Date', 'Description', 'Debit', 'Credit', 'Balance']]
+    rows.push(['', 'Opening balance', '', '', 0])
+    ledgerEntries.forEach((e) => {
+      rows.push([
+        formatDate(e.date),
+        e.label,
+        e.amount < 0 ? -e.amount : '',
+        e.amount > 0 ? e.amount : '',
+        e.balance,
+      ])
+    })
+
+    const ws = XLSX.utils.aoa_to_sheet(rows)
+    ws['!cols'] = [{ wch: 12 }, { wch: 32 }, { wch: 14 }, { wch: 14 }, { wch: 14 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Ledger')
+    const safeName = (customer?.name || 'customer').replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+    XLSX.writeFile(wb, `${safeName}-ledger.xlsx`)
+  }
+
   const handleDeleteEntry = async (entry) => {
     const ok = window.confirm(
       `Delete this ${entry.typeLabel.toLowerCase()}? "${entry.label}" for ${formatMoney(Math.abs(entry.amount))}.\n\nThis can't be undone.`
@@ -122,11 +154,21 @@ export default function CustomerDetail() {
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
         <StatCard label="Total purchased" value={formatMoney(customer.totalPurchasedAmount)} />
-        <StatCard
-          label={customer.totalOutstandingBalance < 0 ? 'Credit balance' : 'Outstanding'}
-          value={formatMoney(Math.abs(customer.totalOutstandingBalance))}
-          accent={customer.totalOutstandingBalance < 0 ? 'teal' : overdue ? 'rust' : 'amber'}
-        />
+        <div>
+          <StatCard
+            label={customer.totalOutstandingBalance < 0 ? 'Credit balance' : 'Outstanding'}
+            value={formatMoney(Math.abs(customer.totalOutstandingBalance))}
+            accent={customer.totalOutstandingBalance < 0 ? 'teal' : overdue ? 'rust' : 'amber'}
+          />
+          {isAdmin && (
+            <button
+              onClick={() => refreshCustomerTotals(customer.id)}
+              className="mt-1 text-xs font-medium text-brand hover:underline"
+            >
+              Recalculate totals
+            </button>
+          )}
+        </div>
         <StatCard label="Orders placed" value={customer.totalOrdersCount} />
         <StatCard
           label="Next due"
@@ -152,9 +194,19 @@ export default function CustomerDetail() {
       )}
 
       <div className="card mt-6">
-        <div className="border-b border-line px-5 py-4">
-          <h2 className="text-sm font-semibold">Account ledger</h2>
-          <p className="text-xs text-ink-faint">Sales debit the balance, payments and credit adjustments restore it.</p>
+        <div className="flex items-center justify-between border-b border-line px-5 py-4">
+          <div>
+            <h2 className="text-sm font-semibold">Account ledger</h2>
+            <p className="text-xs text-ink-faint">Sales debit the balance, payments and credit adjustments restore it.</p>
+          </div>
+          <button
+            onClick={handleExportLedger}
+            className="flex-shrink-0 rounded-md p-1.5 text-ink-faint transition hover:bg-paper hover:text-ink"
+            aria-label="Export ledger to Excel"
+            title="Export to Excel"
+          >
+            <FileSpreadsheet size={18} />
+          </button>
         </div>
         {/* Mobile: stacked cards */}
         <ul className="md:hidden">
