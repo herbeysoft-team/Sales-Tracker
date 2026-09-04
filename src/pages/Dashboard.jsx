@@ -19,7 +19,7 @@ import StatCard from '../components/StatCard'
 import StatusBadge from '../components/StatusBadge'
 import PeriodReportCard from '../components/PeriodReportCard'
 import SalesTrendChart from '../components/SalesTrendChart'
-import TargetsCard from '../components/TargetsCard'
+import TopCustomersCard from '../components/TopCustomersCard'
 
 export default function Dashboard() {
   const { isAdmin, profile } = useAuth()
@@ -29,16 +29,6 @@ export default function Dashboard() {
   const { sales } = useSales(filters)
   const { payments } = usePayments(filters)
   const { marketers } = useMarketers()
-
-  // Admin's target is the sum of every marketer's own target; a marketer
-  // sees just their own — both come straight off the (realtime) user
-  // profile doc(s), no separate settings document to keep in sync.
-  const weeklyTarget = isAdmin
-    ? marketers.reduce((sum, m) => sum + (m.weeklyTarget || 0), 0)
-    : profile?.weeklyTarget || 0
-  const monthlyTarget = isAdmin
-    ? marketers.reduce((sum, m) => sum + (m.monthlyTarget || 0), 0)
-    : profile?.monthlyTarget || 0
 
   const totals = useMemo(() => {
     const totalSalesValue = sales.reduce((s, x) => s + (x.amount || 0), 0)
@@ -145,15 +135,7 @@ export default function Dashboard() {
             <div className="lg:col-span-3">
               <SalesTrendChart sales={sales} />
             </div>
-            <div className="lg:col-span-2">
-              <TargetsCard
-                weeklyTarget={weeklyTarget}
-                monthlyTarget={monthlyTarget}
-                weekSales={reportPeriods.find((r) => r.key === 'week')?.totalSales || 0}
-                monthSales={reportPeriods.find((r) => r.key === 'month')?.totalSales || 0}
-                isAdmin={isAdmin}
-              />
-            </div>
+            <TopCustomersCard customers={customers} />
           </div>
 
       <button
