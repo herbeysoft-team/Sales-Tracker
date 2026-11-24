@@ -86,22 +86,18 @@ export default function Reports() {
         return d && d.getFullYear() === Number(year)
       }
       const byCustomer = {}
-      const bucket = (id) => (byCustomer[id] ||= { sales: 0, paid: 0 })
+      const bucket = (id) => (byCustomer[id] ||= { sales: 0 })
       for (const sl of sales.filter(inYear('orderDate'))) bucket(sl.customerId).sales += sl.amount || 0
-      for (const p of payments.filter(inYear('paidDate'))) bucket(p.customerId).paid += p.amount || 0
       const list = customers
-        .map((c) => ({ c, sales: byCustomer[c.id]?.sales || 0, paid: byCustomer[c.id]?.paid || 0, bal: c.totalOutstandingBalance || 0 }))
-        .filter((r) => r.sales > 0 || r.paid > 0 || r.bal !== 0)
+        .map((c) => ({ c, sales: byCustomer[c.id]?.sales || 0 }))
+        .filter((r) => r.sales > 0)
         .sort((a, b) => b.sales - a.sales)
-      const bal = (n) => (n < 0 ? `${formatMoney(Math.abs(n))} credit` : formatMoney(n))
       const totSales = list.reduce((t, r) => t + r.sales, 0)
-      const totPaid = list.reduce((t, r) => t + r.paid, 0)
-      const totOut = list.reduce((t, r) => t + Math.max(0, r.bal), 0)
       return {
         title: `Annual Sales by Customer — ${year}`,
-        columns: ['Customer', 'Sales', 'Remittance', 'Outstanding'],
-        rows: list.map((r) => [r.c.name, formatMoney(r.sales), formatMoney(r.paid), bal(r.bal)]),
-        footer: ['TOTAL', formatMoney(totSales), formatMoney(totPaid), formatMoney(totOut)],
+        columns: ['Customer', 'Sales'],
+        rows: list.map((r) => [r.c.name, formatMoney(r.sales)]),
+        footer: ['TOTAL', formatMoney(totSales)],
         total: totSales,
         totalLabel: 'Total sales',
       }
