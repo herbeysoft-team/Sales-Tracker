@@ -22,6 +22,7 @@ const CATEGORIES = [
   { key: 'remittance', label: 'Remittance' },
   { key: 'exposure', label: 'Exposure' },
   { key: 'balances', label: 'Customer balances' },
+  { key: 'annual', label: 'Annual by customer' },
 ]
 const PERIODS = [
   { key: 'daily', label: 'Daily' },
@@ -45,7 +46,16 @@ export default function Reports() {
   const [anchorDate, setAnchorDate] = useState(formatDateFns(new Date(), 'yyyy-MM-dd'))
   const [anchorMonth, setAnchorMonth] = useState(formatDateFns(new Date(), 'yyyy-MM'))
 
-  const needsPeriod = category !== 'balances'
+  const [year, setYear] = useState(new Date().getFullYear())
+  const yearOptions = useMemo(() => {
+    const set = new Set([new Date().getFullYear()])
+    for (const s of sales) { const d = toDate(s.orderDate); if (d) set.add(d.getFullYear()) }
+    for (const p of payments) { const d = toDate(p.paidDate); if (d) set.add(d.getFullYear()) }
+    return [...set].sort((a, b) => b - a)
+  }, [sales, payments])
+
+  const isAnnual = category === 'annual'
+  const needsPeriod = category !== 'balances' && !isAnnual
 
   const range = useMemo(() => {
     if (period === 'monthly') {
@@ -61,11 +71,40 @@ export default function Reports() {
     return { start: startOfDay(d), end: endOfDay(d), label: formatDateFns(d, 'MMMM d, yyyy') }
   }, [period, anchorDate, anchorMonth])
 
+  const periodLabel = isAnnual ? `Year ${year}` : needsPeriod ? range.label : `As of ${formatDateFns(new Date(), 'MMM d, yyyy')}`
+
   // Rows + columns for whichever report is currently selected.
-  const { rows, columns, total, totalLabel, title } = useMemo(() => {
+  const { rows, columns, total, totalLabel, title, footer } = useMemo(() => {
     const inRange = (dateField) => (item) => {
       const d = toDate(item[dateField])
       return d && isWithinInterval(d, { start: range.start, end: range.end })
+    }
+
+    if (category === 'annual') {
+      const inYear = (field) => (item) => {
+        const d = toDate(item[field])
+        return d && d.getFullYear() === Number(year)
+      }
+      const byCustomer = {}
+      const bucket = (id) => (byCustomer[id] ||= { sales: 0, paid: 0 })
+      for (const sl of sales.filter(inYear('orderDate'))) bucket(sl.customerId).sales += sl.amount || 0
+      for (const p of payments.filter(inYear('paidDate'))) bucket(p.customerId).paid += p.amount || 0
+      const list = customers
+        .map((c) => ({ c, sales: byCustomer[c.id]?.sales || 0, paid: byCustomer[c.id]?.paid || 0, bal: c.totalOutstandingBalance || 0 }))
+        .filter((r) => r.sales > 0 || r.paid > 0 || r.bal !== 0)
+        .sort((a, b) => b.sales - a.sales)
+      const bal = (n) => (n < 0 ? `${formatMoney(Math.abs(n))} credit` : formatMoney(n))
+      const totSales = list.reduce((t, r) => t + r.sales, 0)
+      const totPaid = list.reduce((t, r) => t + r.paid, 0)
+      const totOut = list.reduce((t, r) => t + Math.max(0, r.bal), 0)
+      return {
+        title: `Annual Sales by Customer — ${year}`,
+        columns: ['Customer', 'Sales', 'Remittance', 'Outstanding'],
+        rows: list.map((r) => [r.c.name, formatMoney(r.sales), formatMoney(r.paid), bal(r.bal)]),
+        footer: ['TOTAL', formatMoney(totSales), formatMoney(totPaid), formatMoney(totOut)],
+        total: totSales,
+        totalLabel: 'Total sales',
+      }
     }
 
     if (category === 'sales') {
@@ -131,19 +170,18 @@ export default function Reports() {
     }
     return {
       title: 'Customer Balances',
-      columns: isAdmin ? ['Customer', 'Marketer(s)', 'Last remittance', 'Balance'] : ['Customer', 'Last remittance', 'Balance'],
+      columns: ['Customer', 'Last remittance', 'Balance'],
       rows: customers.map((c) => {
         const last = lastRemittanceByCustomer[c.id]
         const balance = c.totalOutstandingBalance || 0
         const balanceText = balance < 0 ? `${formatMoney(Math.abs(balance))} credit` : formatMoney(balance)
         const lastText = last ? `${formatDate(last.date)} · ${formatMoney(last.amount)}` : 'No payments yet'
-        const marketerNames = (c.assignedMarketerIds || []).map(marketerName).join(', ') || '—'
-        return isAdmin ? [c.name, marketerNames, lastText, balanceText] : [c.name, lastText, balanceText]
+        return [c.name, lastText, balanceText]
       }),
       total: customers.reduce((sum, c) => sum + Math.max(0, c.totalOutstandingBalance || 0), 0),
       totalLabel: 'Total outstanding',
     }
-  }, [category, period, range, sales, payments, customers, marketers, isAdmin])
+  }, [category, period, range, year, sales, payments, customers, marketers, isAdmin])
 
   const handlePrint = () => window.print()
 
@@ -155,15 +193,15 @@ export default function Reports() {
     pdf.text(title, 14, 24)
     pdf.setFontSize(9)
     pdf.setTextColor(120)
-    const subtitle = needsPeriod
-      ? `${range.label}${!isAdmin ? ` · ${profile?.name}` : ''}`
-      : `As of ${formatDateFns(new Date(), 'MMM d, yyyy')}${!isAdmin ? ` · ${profile?.name}` : ''}`
+    const subtitle = `${periodLabel}${!isAdmin ? ` · ${profile?.name}` : ''}`
     pdf.text(subtitle, 14, 30)
 
     autoTable(pdf, {
       startY: 36,
       head: [columns],
       body: rows,
+      foot: footer ? [footer] : undefined,
+      footStyles: { fillColor: [245, 240, 240], textColor: 20, fontStyle: 'bold' },
       styles: { fontSize: 8 },
       headStyles: { fillColor: [179, 18, 27] },
       margin: { left: 14, right: 14 },
@@ -172,9 +210,9 @@ export default function Reports() {
     const finalY = pdf.lastAutoTable ? pdf.lastAutoTable.finalY : 40
     pdf.setFontSize(10)
     pdf.setTextColor(0)
-    pdf.text(`${totalLabel}: ${formatMoney(total)}`, 14, finalY + 10)
+    if (!footer) pdf.text(`${totalLabel}: ${formatMoney(total)}`, 14, finalY + 10)
 
-    const filenameBits = needsPeriod ? [category, period, range.label] : [category]
+    const filenameBits = needsPeriod ? [category, period, range.label] : isAnnual ? [category, year] : [category]
     pdf.save(`${filenameBits.join('-').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`)
   }
 
@@ -214,6 +252,17 @@ export default function Reports() {
           </div>
         </div>
 
+        {isAnnual && (
+          <div>
+            <label className="label">Year</label>
+            <select className="input w-32" value={year} onChange={(e) => setYear(Number(e.target.value))}>
+              {yearOptions.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {needsPeriod && (
           <div className="flex flex-wrap items-end gap-4">
             <div>
@@ -251,7 +300,7 @@ export default function Reports() {
       <div className="mb-4 hidden print:block">
         <h1 className="text-lg font-semibold">SALES TRACKER — {title}</h1>
         <p className="text-sm text-ink-soft">
-          {needsPeriod ? range.label : `As of ${formatDateFns(new Date(), 'MMM d, yyyy')}`}
+          {periodLabel}
           {!isAdmin && ` · ${profile?.name}`}
         </p>
       </div>
@@ -260,7 +309,7 @@ export default function Reports() {
         <div className="flex items-center justify-between border-b border-line px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold">{title}</h2>
-            <p className="text-xs text-ink-faint">{needsPeriod ? range.label : 'Live snapshot'}</p>
+            <p className="text-xs text-ink-faint">{needsPeriod || isAnnual ? periodLabel : 'Live snapshot'}</p>
           </div>
           <p className="text-right">
             <span className="block text-xs text-ink-faint">{totalLabel}</span>
@@ -295,6 +344,15 @@ export default function Reports() {
               </tr>
             )}
           </tbody>
+          {footer && rows.length > 0 && (
+            <tfoot>
+              <tr className="border-t-2 border-line bg-paper font-semibold print:bg-white">
+                {footer.map((cell, j) => (
+                  <td key={j} className="px-5 py-3">{cell}</td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </div>
